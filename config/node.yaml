@@ -1,0 +1,48 @@
+# Copyright (c) 2026 WabiSaby
+# SPDX-License-Identifier: MIT
+
+# Storage Node Configuration
+# This configuration is used by community-deployable storage nodes.
+
+# Required: Authentication token for connecting to the coordinator
+# Can also be set via WABISABY_NODE_AUTH_TOKEN environment variable
+auth_token: ""
+
+# Required: Network address of the coordinator gRPC endpoint
+# Format: host:port (e.g., "coordinator.wabisaby.com:50051")
+# Can also be set via WABISABY_NODE_COORDINATOR_ADDR environment variable
+coordinator_addr: "localhost:50051"
+
+# Optional: IPFS API URL (default: http://localhost:5001)
+# The HTTP API endpoint for the local IPFS node
+ipfs_api_url: "http://localhost:5001"
+
+# Optional: IPFS data directory (default: ~/.wabisaby/ipfs)
+# Directory where IPFS stores its repository and data
+ipfs_data_dir: ""
+
+# Optional: Human-readable name for this node (auto-generated if not provided)
+# Format: wabisaby-node-{hostname}-{username}
+node_name: ""
+
+# Optional: Region identifier for this node (auto-detected from timezone if not provided)
+# Examples: "us", "eu", "asia", "unknown"
+region: ""
+
+# Optional: Wallet address associated with this node
+# Used for potential future payment/incentive mechanisms
+wallet_address: ""
+
+# Optional: Storage capacity in GB (auto-detected from available disk space if not provided)
+# Uses 80% of available disk space by default
+storage_capacity_gb: 100
+
+# Optional: How often to send heartbeats to the coordinator (default: 1m)
+heartbeat_interval: "1m"
+
+# Optional: How often to poll for new pinning tasks (default: 30s)
+poll_interval: "30s"
+
+# Optional: Log level (default: "info")
+# Options: "debug", "info", "warn", "error"
+log_level: "info"
