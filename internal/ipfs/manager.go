@@ -12,13 +12,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
-
-	"github.com/wabisaby/wabisaby-node/internal/ipfsclient"
 )
 
 // IPFSManager manages the IPFS lifecycle: installation, initialization, configuration, and daemon management.
 type IPFSManager struct {
-	ipfsClient  *ipfsclient.IPFSClient
+	ipfsClient  *Client
 	binaryPath  string
 	dataDir     string
 	apiURL      string
@@ -190,7 +188,7 @@ func (m *IPFSManager) waitForDaemon(ctx context.Context) {
 	defer ticker.Stop()
 
 	timeout := time.After(30 * time.Second)
-	client := ipfsclient.NewIPFSClient(m.apiURL)
+	client := NewClient(m.apiURL)
 
 	for {
 		select {
@@ -246,7 +244,7 @@ func (m *IPFSManager) StopDaemon(ctx context.Context) error {
 // GetPeerInfo returns the peer ID and multiaddresses of the local IPFS node.
 func (m *IPFSManager) GetPeerInfo(ctx context.Context) (peerID string, multiaddrs []string, err error) {
 	if m.ipfsClient == nil {
-		m.ipfsClient = ipfsclient.NewIPFSClient(m.apiURL)
+		m.ipfsClient = NewClient(m.apiURL)
 	}
 
 	// Wait for daemon to be ready

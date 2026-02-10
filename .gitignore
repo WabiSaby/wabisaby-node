@@ -1,0 +1,46 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+node
+
+# Test binary
+*.test
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace
+go.work
+
+# Environment and local config overrides
+.env
+.env.local
+.env.*.local
+node.local.yaml
+
+# IDEs
+.vscode/
+.idea/
+.cursor/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.pid

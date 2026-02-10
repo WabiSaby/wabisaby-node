@@ -12,7 +12,6 @@ import (
 
 	nodepb "github.com/wabisaby/wabisaby-protos/go/node"
 	"github.com/wabisaby/wabisaby-node/internal/ipfs"
-	"github.com/wabisaby/wabisaby-node/internal/ipfsclient"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -28,7 +27,7 @@ type Agent struct {
 	client      nodepb.NodeCoordinatorClient // gRPC client for NodeCoordinator API
 	conn        *grpc.ClientConn             // Underlying gRPC connection
 	logger      *slog.Logger                 // Logger for agent events
-	ipfs        *ipfsclient.IPFSClient       // Client for local IPFS API
+	ipfs        *ipfs.Client                  // Client for local IPFS API
 	ipfsManager *ipfs.IPFSManager            // IPFS lifecycle manager
 	startTime   time.Time                    // Time when the agent started (for uptime tracking)
 }
@@ -83,7 +82,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 	a.conn = conn
 	a.client = nodepb.NewNodeCoordinatorClient(conn)
-	a.ipfs = ipfsclient.NewIPFSClient(a.config.IPFSAPIURL)
+	a.ipfs = ipfs.NewClient(a.config.IPFSAPIURL)
 
 	// 4. Register with coordinator
 	if err := a.register(ctx, multiaddrs); err != nil {
@@ -222,7 +221,6 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			stat, err := a.ipfs.RepoStat(ctx)
 			storageUsed := int64(0)
 			if err == nil && stat != nil {
-				// Safe uint64 -> int64 conversion, clamping to max if overflow
 				if stat.RepoSize > uint64(math.MaxInt64) {
 					storageUsed = math.MaxInt64
 				} else {
