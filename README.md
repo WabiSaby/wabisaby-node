@@ -35,18 +35,16 @@ cp config/node.yaml ./node.yaml
 
 ### Configuration
 
-See [`config/node.yaml`](config/node.yaml) for all available options.
+**Required (env fallbacks):**
+- `auth.token` / `WABISABY_AUTH_TOKEN` - JWT for the coordinator
+- `coordinator.address` / `WABISABY_COORDINATOR_ADDR` - Coordinator gRPC address
 
-**Required:**
-- `auth_token` - JWT authentication token (or `WABISABY_AUTH_TOKEN` env var)
-- `coordinator_addr` - Network coordinator gRPC address (or `WABISABY_NODE_COORDINATOR_ADDR` env var)
-
-**Auto-detected (optional):**
-- `storage_capacity_gb` - Defaults to 80% of available disk space
-- `region` - Detected from timezone
-- `node_name` - Generated from hostname + username
-- `ipfs_api_url` - Defaults to `http://localhost:5001`
-- `ipfs_data_dir` - Defaults to `~/.wabisaby/ipfs`
+**Optional (with defaults or auto-detection):**
+- `storage.capacity_gb` - 80% of available disk if unset
+- `node.region` - From timezone
+- `node.name` - From hostname + username
+- `ipfs.api_url` - `http://localhost:5001`
+- `ipfs.data_dir` - `~/.wabisaby/ipfs`
 
 ## Architecture
 

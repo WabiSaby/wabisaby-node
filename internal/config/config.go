@@ -15,22 +15,54 @@ import (
 	"github.com/spf13/viper"
 )
 
-// NodeConfig holds storage node configuration.
+// NodeConfig holds storage node configuration (nested structure for node.yaml).
 type NodeConfig struct {
-	// Required fields
-	AuthToken       string `mapstructure:"auth_token"`
-	CoordinatorAddr string `mapstructure:"coordinator_addr"`
+	Auth        AuthConfig        `mapstructure:"auth"`
+	Coordinator CoordinatorConfig `mapstructure:"coordinator"`
+	IPFS        IPFSConfig        `mapstructure:"ipfs"`
+	Node        NodeIdentityConfig `mapstructure:"node"`
+	Storage     StorageConfig     `mapstructure:"storage"`
+	Intervals   IntervalsConfig   `mapstructure:"intervals"`
+	Log         LogConfig         `mapstructure:"log"`
+}
 
-	// Optional fields (auto-detected if not provided)
-	IPFSAPIURL        string        `mapstructure:"ipfs_api_url"`
-	IPFSDataDir       string        `mapstructure:"ipfs_data_dir"`
-	NodeName          string        `mapstructure:"node_name"`
-	Region            string        `mapstructure:"region"`
-	WalletAddress     string        `mapstructure:"wallet_address"`
-	StorageCapacityGB int64         `mapstructure:"storage_capacity_gb"`
-	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`
-	PollInterval      time.Duration `mapstructure:"poll_interval"`
-	LogLevel          string        `mapstructure:"log_level"`
+// AuthConfig holds authentication settings.
+type AuthConfig struct {
+	Token string `mapstructure:"token"`
+}
+
+// CoordinatorConfig holds coordinator connection settings.
+type CoordinatorConfig struct {
+	Address string `mapstructure:"address"`
+}
+
+// IPFSConfig holds IPFS daemon settings.
+type IPFSConfig struct {
+	APIURL  string `mapstructure:"api_url"`
+	DataDir string `mapstructure:"data_dir"`
+}
+
+// NodeIdentityConfig holds node identity (name, region, wallet).
+type NodeIdentityConfig struct {
+	Name          string `mapstructure:"name"`
+	Region        string `mapstructure:"region"`
+	WalletAddress string `mapstructure:"wallet_address"`
+}
+
+// StorageConfig holds storage capacity settings.
+type StorageConfig struct {
+	CapacityGB int64 `mapstructure:"capacity_gb"`
+}
+
+// IntervalsConfig holds heartbeat and poll intervals.
+type IntervalsConfig struct {
+	Heartbeat time.Duration `mapstructure:"heartbeat"`
+	Poll      time.Duration `mapstructure:"poll"`
+}
+
+// LogConfig holds logging settings.
+type LogConfig struct {
+	Level string `mapstructure:"level"`
 }
 
 // LoadNodeConfig loads storage node configuration from config file and environment variables.
@@ -44,14 +76,14 @@ func LoadNodeConfig() *NodeConfig {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
-	// Storage node defaults
-	viper.SetDefault("coordinator_addr", "localhost:50051")
-	viper.SetDefault("ipfs_api_url", "http://localhost:5001")
-	viper.SetDefault("node_name", "wabisaby-community-node")
-	viper.SetDefault("storage_capacity_gb", 100)
-	viper.SetDefault("heartbeat_interval", 1*time.Minute)
-	viper.SetDefault("poll_interval", 30*time.Second)
-	viper.SetDefault("log_level", "info")
+	// Nested defaults (viper uses dot for nesting)
+	viper.SetDefault("coordinator.address", "localhost:50051")
+	viper.SetDefault("ipfs.api_url", "http://localhost:5001")
+	viper.SetDefault("node.name", "wabisaby-community-node")
+	viper.SetDefault("storage.capacity_gb", 100)
+	viper.SetDefault("intervals.heartbeat", 1*time.Minute)
+	viper.SetDefault("intervals.poll", 30*time.Second)
+	viper.SetDefault("log.level", "info")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -66,75 +98,60 @@ func LoadNodeConfig() *NodeConfig {
 		log.Fatalf("Unable to decode into struct: %v", err)
 	}
 
-	// Auto-detect missing values
-	if config.AuthToken == "" {
-		config.AuthToken = os.Getenv("WABISABY_AUTH_TOKEN")
+	// Auth: fallback to legacy env
+	if config.Auth.Token == "" {
+		config.Auth.Token = os.Getenv("WABISABY_AUTH_TOKEN")
 	}
-	if config.CoordinatorAddr == "" {
-		config.CoordinatorAddr = os.Getenv("WABISABY_COORDINATOR_ADDR")
+	if config.Coordinator.Address == "" {
+		config.Coordinator.Address = os.Getenv("WABISABY_COORDINATOR_ADDR")
 	}
 
 	// Auto-detect storage capacity if not provided
-	if config.StorageCapacityGB == 0 {
+	if config.Storage.CapacityGB == 0 {
 		capacityGB := detectStorageCapacity()
 		if capacityGB > 0 {
-			config.StorageCapacityGB = capacityGB
+			config.Storage.CapacityGB = capacityGB
 		} else {
-			config.StorageCapacityGB = 100 // Default fallback
+			config.Storage.CapacityGB = 100
 		}
 	}
 
-	// Auto-detect region if not provided
-	if config.Region == "" {
-		config.Region = detectRegion()
+	if config.Node.Region == "" {
+		config.Node.Region = detectRegion()
+	}
+	if config.Node.Name == "" {
+		config.Node.Name = generateNodeName()
 	}
 
-	// Auto-generate node name if not provided
-	if config.NodeName == "" {
-		config.NodeName = generateNodeName()
+	if config.IPFS.APIURL == "" {
+		config.IPFS.APIURL = "http://localhost:5001"
 	}
-
-	// Set defaults for optional fields
-	if config.IPFSAPIURL == "" {
-		config.IPFSAPIURL = "http://localhost:5001"
-	}
-	if config.IPFSDataDir == "" {
+	if config.IPFS.DataDir == "" {
 		homeDir, _ := os.UserHomeDir()
-		config.IPFSDataDir = filepath.Join(homeDir, ".wabisaby", "ipfs")
+		config.IPFS.DataDir = filepath.Join(homeDir, ".wabisaby", "ipfs")
 	}
 
 	return &config
 }
 
 // detectStorageCapacity detects available disk space and returns capacity in GB.
-// Uses 80% of available space to leave room for OS.
 func detectStorageCapacity() int64 {
 	var stat syscall.Statfs_t
 	wd, err := os.Getwd()
 	if err != nil {
 		return 0
 	}
-
 	if err := syscall.Statfs(wd, &stat); err != nil {
 		return 0
 	}
-
-	// Calculate available bytes (blocks * block size)
 	availableBytes := stat.Bavail * uint64(stat.Bsize)
-	// Use 80% of available space
 	usableBytes := availableBytes * 80 / 100
-	// Convert to GB
-	capacityGB := int64(usableBytes / (1024 * 1024 * 1024))
-
-	return capacityGB
+	return int64(usableBytes / (1024 * 1024 * 1024))
 }
 
-// detectRegion detects the region based on timezone or returns a default.
 func detectRegion() string {
-	// Try to get timezone
 	tz := os.Getenv("TZ")
 	if tz != "" {
-		// Extract region from timezone (e.g., "America/New_York" -> "us-east")
 		if strings.Contains(tz, "America") {
 			return "us"
 		}
@@ -145,25 +162,19 @@ func detectRegion() string {
 			return "asia"
 		}
 	}
-
-	// Default to unknown if can't detect
 	return "unknown"
 }
 
-// generateNodeName generates a unique node name based on hostname.
 func generateNodeName() string {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
 	}
-
 	currentUser, err := user.Current()
 	username := "user"
 	if err == nil {
 		username = currentUser.Username
 	}
-
-	// Format: wabisaby-node-{hostname}-{username}
 	return strings.ToLower(strings.ReplaceAll(
 		strings.Join([]string{"wabisaby-node", hostname, username}, "-"),
 		" ", "-",

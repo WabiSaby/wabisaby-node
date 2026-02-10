@@ -17,7 +17,7 @@ import (
 // ProvideNodeLogger provides a structured logger for the node based on config.
 func ProvideNodeLogger(cfg *config.NodeConfig) *slog.Logger {
 	level := slog.LevelInfo
-	if cfg.LogLevel == "debug" {
+	if cfg.Log.Level == "debug" {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
@@ -27,8 +27,8 @@ func ProvideNodeLogger(cfg *config.NodeConfig) *slog.Logger {
 func ProvideIPFSManager(cfg *config.NodeConfig, logger *slog.Logger) *ipfs.IPFSManager {
 	managerCfg := ipfs.ManagerConfig{
 		BinaryPath: "", // Auto-detect
-		DataDir:    cfg.IPFSDataDir,
-		APIURL:     cfg.IPFSAPIURL,
+		DataDir:    cfg.IPFS.DataDir,
+		APIURL:     cfg.IPFS.APIURL,
 		Logger:     logger,
 	}
 	return ipfs.NewIPFSManager(managerCfg)
@@ -41,16 +41,16 @@ func ProvideNodeAgent(
 	logger *slog.Logger,
 ) *agent.Agent {
 	agentCfg := agent.AgentConfig{
-		CoordinatorAddr:   cfg.CoordinatorAddr,
-		AuthToken:         cfg.AuthToken,
-		IPFSAPIURL:        cfg.IPFSAPIURL,
-		IPFSDataDir:       cfg.IPFSDataDir,
-		NodeName:          cfg.NodeName,
-		Region:            cfg.Region,
-		WalletAddress:     cfg.WalletAddress,
-		CapacityBytes:     cfg.StorageCapacityGB * 1024 * 1024 * 1024,
-		HeartbeatInterval: cfg.HeartbeatInterval,
-		PollInterval:      cfg.PollInterval,
+		CoordinatorAddr:   cfg.Coordinator.Address,
+		AuthToken:         cfg.Auth.Token,
+		IPFSAPIURL:        cfg.IPFS.APIURL,
+		IPFSDataDir:       cfg.IPFS.DataDir,
+		NodeName:          cfg.Node.Name,
+		Region:            cfg.Node.Region,
+		WalletAddress:     cfg.Node.WalletAddress,
+		CapacityBytes:     cfg.Storage.CapacityGB * 1024 * 1024 * 1024,
+		HeartbeatInterval: cfg.Intervals.Heartbeat,
+		PollInterval:      cfg.Intervals.Poll,
 	}
 	return agent.NewAgent(agentCfg, ipfsManager, logger)
 }
@@ -62,7 +62,7 @@ func StartNodeAgent(
 	nodeAgent *agent.Agent,
 	logger *slog.Logger,
 ) {
-	logger.Info("starting WabiSaby storage node", "name", cfg.NodeName, "version", "1.0.0")
+	logger.Info("starting WabiSaby storage node", "name", cfg.Node.Name, "version", "1.0.0")
 
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
