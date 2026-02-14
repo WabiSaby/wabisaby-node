@@ -10,7 +10,7 @@ import (
 	"math"
 	"time"
 
-	nodepb "github.com/wabisaby/wabisaby-protos/go/node"
+	nodepb "github.com/wabisaby/wabisaby-protos-go/go/node"
 	"github.com/wabisaby/wabisaby-node/internal/ipfs"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

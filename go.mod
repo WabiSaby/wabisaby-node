@@ -4,7 +4,7 @@ go 1.24.4
 
 require (
 	github.com/spf13/viper v1.21.0
-	github.com/wabisaby/wabisaby-protos v0.0.1
+	github.com/wabisaby/wabisaby-protos-go v0.0.1
 	go.uber.org/fx v1.21.0
 	google.golang.org/grpc v1.78.0
 )
@@ -30,4 +30,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/wabisaby/wabisaby-protos => ../wabisaby-protos
+replace github.com/wabisaby/wabisaby-protos-go => ../wabisaby-protos-go
