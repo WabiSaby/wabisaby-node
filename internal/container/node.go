@@ -5,8 +5,10 @@ package container
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/wabisaby/wabisaby-node/internal/agent"
 	"github.com/wabisaby/wabisaby-node/internal/config"
@@ -43,6 +45,9 @@ func ProvideNodeAgent(
 	agentCfg := agent.AgentConfig{
 		CoordinatorAddr:   cfg.Coordinator.Address,
 		AuthToken:         cfg.Auth.Token,
+		RefreshToken:      cfg.Auth.RefreshToken,
+		KeycloakTokenURL:  cfg.Auth.KeycloakTokenURL,
+		KeycloakClientID:  cfg.Auth.KeycloakClientID,
 		IPFSAPIURL:        cfg.IPFS.APIURL,
 		IPFSDataDir:       cfg.IPFS.DataDir,
 		NodeName:          cfg.Node.Name,
@@ -69,7 +74,11 @@ func StartNodeAgent(
 			// Start agent in a goroutine - it will block until ctx.Done()
 			go func() {
 				if err := nodeAgent.Start(ctx); err != nil {
-					logger.Error("agent stopped with error", "error", err)
+					errStr := err.Error()
+					// Log error string explicitly so it's always visible (slog may not render some error types well)
+					logger.Error("agent stopped with error", "error", err, "message", errStr)
+					fmt.Fprintf(os.Stderr, "[node] ERROR agent stopped: %s\n", errStr)
+					time.Sleep(200 * time.Millisecond) // allow logs to flush before exit
 					os.Exit(1)
 				}
 			}()

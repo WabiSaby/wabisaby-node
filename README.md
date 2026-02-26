@@ -46,6 +46,36 @@ cp config/node.yaml ./node.yaml
 - `ipfs.api_url` - `http://localhost:5001`
 - `ipfs.data_dir` - `~/.wabisaby/ipfs`
 
+### Acquiring a token for the node
+
+The coordinator expects a **valid JWT** (signed by your auth provider). How you get it depends on the environment.
+
+#### Local development (Keycloak)
+
+When running against a local network-coordinator that uses Keycloak (e.g. WabiSaby devkit):
+
+1. **Start Keycloak** (if not already running), e.g. from the repo root:
+   ```bash
+   docker compose -f docker/docker-compose.yml up -d keycloak
+   ```
+2. **Create a user** in the `wabisaby` realm (Keycloak Admin UI: http://localhost:8180 → realm **wabisaby** → Users → Create user, set username/password and enable the user). Set a permanent password in the Credentials tab (turn **Temporary** off). If you get "Account is not fully set up" when requesting a token, run from the repo root: `./docker/keycloak/fix-node-user.sh YOUR_USERNAME` to clear required actions via the Admin API.
+3. **Get tokens** (programmatic refresh recommended so the node refreshes before expiry):
+   ```bash
+   # From devkit repo root: print .env lines (refresh_token + keycloak URL) so the node refreshes automatically
+   ./docker/keycloak/get-node-token.sh --env node node
+   ```
+   Paste the output into your **.env** (devkit app root). The node will use the refresh token to obtain and refresh the access token in the background.
+
+   Alternatively, for a one-off access token only (expires; you must re-run and update .env when it expires):
+   ```bash
+   ./docker/keycloak/get-node-token.sh node node
+   ```
+   Then set in .env: `WABISABY_NODE_AUTH_TOKEN=<paste-the-token-here>`
+
+#### Production
+
+In production, tokens are typically obtained via your app’s login flow (e.g. OAuth/OIDC in the frontend). Use the same **access token** (Bearer token) that the app uses for authenticated API calls. Copy it from the app (e.g. from the frontend after login) and set `WABISABY_NODE_AUTH_TOKEN` or `auth.token` for the node. For long‑running nodes, consider a dedicated service account or token refresh flow if your provider supports it.
+
 ## Architecture
 
 See [`docs/node-setup.md`](docs/node-setup.md) for detailed architecture documentation.

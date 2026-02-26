@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,7 @@ func main() {
 	)
 
 	if err := app.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "[node] startup error:", err)
 		os.Exit(1)
 	}
 
@@ -28,6 +30,7 @@ func main() {
 	defer cancel()
 
 	if err := app.Start(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "[node] start error:", err)
 		os.Exit(1)
 	}
 
@@ -38,6 +41,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := app.Stop(shutdownCtx); err != nil {
+		fmt.Fprintln(os.Stderr, "[node] shutdown error:", err)
 		os.Exit(1)
 	}
 }

@@ -5,8 +5,10 @@ package ipfs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,6 +149,56 @@ func (m *IPFSManager) ConfigurePrivateNetwork(ctx context.Context, swarmKey stri
 	return nil
 }
 
+// apiAddrFromURL returns a Kubo multiaddr for the API (e.g. /ip4/127.0.0.1/tcp/5001) from apiURL.
+func apiAddrFromURL(apiURL string) (string, error) {
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid API URL: %w", err)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "5001"
+	}
+	host := u.Hostname()
+	if host == "" || host == "localhost" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("/ip4/%s/tcp/%s", host, port), nil
+}
+
+// setAPIAddressInConfig sets Addresses.API in the IPFS repo config so the daemon binds to the configured port.
+func (m *IPFSManager) setAPIAddressInConfig() error {
+	repoPath := filepath.Join(m.dataDir, ".ipfs")
+	configPath := filepath.Join(repoPath, "config")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read IPFS config: %w", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("parse IPFS config: %w", err)
+	}
+	apiAddr, err := apiAddrFromURL(m.apiURL)
+	if err != nil {
+		return err
+	}
+	addrs, _ := cfg["Addresses"].(map[string]interface{})
+	if addrs == nil {
+		addrs = make(map[string]interface{})
+		cfg["Addresses"] = addrs
+	}
+	addrs["API"] = apiAddr
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal IPFS config: %w", err)
+	}
+	if err := os.WriteFile(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("write IPFS config: %w", err)
+	}
+	m.logger.Info("IPFS API address configured", "api", apiAddr)
+	return nil
+}
+
 // StartDaemon starts the IPFS daemon in the background.
 func (m *IPFSManager) StartDaemon(ctx context.Context) error {
 	if m.daemonCmd != nil {
@@ -160,6 +212,9 @@ func (m *IPFSManager) StartDaemon(ctx context.Context) error {
 	}
 
 	repoPath := filepath.Join(m.dataDir, ".ipfs")
+	if err := m.setAPIAddressInConfig(); err != nil {
+		return fmt.Errorf("configure IPFS API address: %w", err)
+	}
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("IPFS_PATH=%s", repoPath))
 
@@ -176,33 +231,35 @@ func (m *IPFSManager) StartDaemon(ctx context.Context) error {
 	m.daemonCmd = cmd
 	m.daemonReady = false
 
-	// Wait for daemon to be ready
-	go m.waitForDaemon(ctx)
-
+	// Block until daemon is ready so the rest of startup sees a consistent state
+	if err := m.waitForDaemonReady(ctx); err != nil {
+		_ = m.daemonCmd.Process.Kill()
+		m.daemonCmd = nil
+		return err
+	}
+	m.logger.Info("IPFS daemon is ready")
 	return nil
 }
 
-// waitForDaemon polls the IPFS API until the daemon is ready.
-func (m *IPFSManager) waitForDaemon(ctx context.Context) {
+// waitForDaemonReady polls the IPFS API until the daemon is ready (or timeout/context cancel).
+func (m *IPFSManager) waitForDaemonReady(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	timeout := time.After(30 * time.Second)
+	deadline := time.After(30 * time.Second)
 	client := NewClient(m.apiURL)
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-timeout:
-			m.logger.Error("IPFS daemon failed to start within timeout")
-			return
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("IPFS daemon did not become ready within 30s")
 		case <-ticker.C:
 			if _, err := client.Version(ctx); err == nil {
 				m.daemonReady = true
 				m.ipfsClient = client
-				m.logger.Info("IPFS daemon is ready")
-				return
+				return nil
 			}
 		}
 	}

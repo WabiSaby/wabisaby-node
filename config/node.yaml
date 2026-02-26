@@ -5,14 +5,22 @@
 # Used by the community-deployable wabisaby-node binary.
 
 auth:
-  # Required: JWT for connecting to the coordinator
+  # Access token (JWT). Optional if refresh_token + keycloak_token_url are set (node will fetch/refresh automatically).
   # Env: WABISABY_NODE_AUTH_TOKEN or WABISABY_AUTH_TOKEN
   token: ""
+  # Refresh token from Keycloak; with keycloak_token_url the node refreshes the access token before expiry.
+  # Env: WABISABY_NODE_AUTH_REFRESH_TOKEN
+  refresh_token: ""
+  # Keycloak token endpoint for refresh, e.g. http://localhost:8180/realms/wabisaby/protocol/openid-connect/token
+  # Env: WABISABY_NODE_KEYCLOAK_TOKEN_URL
+  keycloak_token_url: ""
+  # OIDC client id for refresh (default: wabisaby-api)
+  keycloak_client_id: "wabisaby-api"
 
 coordinator:
-  # Required: gRPC address (host:port)
+  # Required: gRPC address (host:port). Use 50052 for network-coordinator (NodeCoordinator); 50051 is capabilities-server.
   # Env: WABISABY_NODE_COORDINATOR_ADDRESS or WABISABY_COORDINATOR_ADDR
-  address: "localhost:50051"
+  address: "localhost:50052"
 
 ipfs:
   api_url: "http://localhost:5001"

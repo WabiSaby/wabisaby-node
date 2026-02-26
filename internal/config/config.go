@@ -28,7 +28,10 @@ type NodeConfig struct {
 
 // AuthConfig holds authentication settings.
 type AuthConfig struct {
-	Token string `mapstructure:"token"`
+	Token              string `mapstructure:"token"`                // JWT access token (or use refresh_token for programmatic refresh)
+	RefreshToken       string `mapstructure:"refresh_token"`         // Keycloak refresh token; if set with keycloak_token_url, node will refresh access token automatically
+	KeycloakTokenURL   string `mapstructure:"keycloak_token_url"`    // Keycloak token endpoint, e.g. http://localhost:8180/realms/wabisaby/protocol/openid-connect/token
+	KeycloakClientID   string `mapstructure:"keycloak_client_id"`    // OIDC client id for token refresh (default: wabisaby-api)
 }
 
 // CoordinatorConfig holds coordinator connection settings.
@@ -77,7 +80,7 @@ func LoadNodeConfig() *NodeConfig {
 	viper.AutomaticEnv()
 
 	// Nested defaults (viper uses dot for nesting)
-	viper.SetDefault("coordinator.address", "localhost:50051")
+	viper.SetDefault("coordinator.address", "localhost:50052")
 	viper.SetDefault("ipfs.api_url", "http://localhost:5001")
 	viper.SetDefault("node.name", "wabisaby-community-node")
 	viper.SetDefault("storage.capacity_gb", 100)
@@ -101,6 +104,15 @@ func LoadNodeConfig() *NodeConfig {
 	// Auth: fallback to legacy env
 	if config.Auth.Token == "" {
 		config.Auth.Token = os.Getenv("WABISABY_AUTH_TOKEN")
+	}
+	if config.Auth.RefreshToken == "" {
+		config.Auth.RefreshToken = os.Getenv("WABISABY_NODE_AUTH_REFRESH_TOKEN")
+	}
+	if config.Auth.KeycloakTokenURL == "" {
+		config.Auth.KeycloakTokenURL = os.Getenv("WABISABY_NODE_KEYCLOAK_TOKEN_URL")
+	}
+	if config.Auth.KeycloakClientID == "" {
+		config.Auth.KeycloakClientID = "wabisaby-api"
 	}
 	if config.Coordinator.Address == "" {
 		config.Coordinator.Address = os.Getenv("WABISABY_COORDINATOR_ADDR")

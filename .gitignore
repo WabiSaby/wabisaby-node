@@ -5,7 +5,8 @@
 *.so
 *.dylib
 bin/
-node
+/node
+/node/
 
 # Test binary
 *.test

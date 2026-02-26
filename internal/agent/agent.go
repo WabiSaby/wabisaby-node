@@ -5,9 +5,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	nodepb "github.com/wabisaby/wabisaby-protos-go/go/node"
@@ -21,21 +27,27 @@ import (
 // It handles node registration, periodic heartbeats, polling and execution of pinning tasks,
 // and maintains status reporting logic.
 type Agent struct {
-	nodeID      string                       // Unique ID assigned by coordinator after registration
-	peerID      string                       // IPFS peer ID of this node
-	config      AgentConfig                  // Configuration for the Agent
-	client      nodepb.NodeCoordinatorClient // gRPC client for NodeCoordinator API
-	conn        *grpc.ClientConn             // Underlying gRPC connection
-	logger      *slog.Logger                 // Logger for agent events
-	ipfs        *ipfs.Client                  // Client for local IPFS API
-	ipfsManager *ipfs.IPFSManager            // IPFS lifecycle manager
-	startTime   time.Time                    // Time when the agent started (for uptime tracking)
+	nodeID        string                       // Unique ID assigned by coordinator after registration
+	peerID        string                       // IPFS peer ID of this node
+	config        AgentConfig                  // Configuration for the Agent
+	client        nodepb.NodeCoordinatorClient // gRPC client for NodeCoordinator API
+	conn          *grpc.ClientConn             // Underlying gRPC connection
+	logger        *slog.Logger                 // Logger for agent events
+	ipfs          *ipfs.Client                  // Client for local IPFS API
+	ipfsManager   *ipfs.IPFSManager            // IPFS lifecycle manager
+	startTime     time.Time                    // Time when the agent started (for uptime tracking)
+	tokenMu       sync.RWMutex                 // protects currentToken and refreshToken
+	currentToken  string                       // current JWT access token (refreshed in background when refresh is configured)
+	refreshToken  string                       // Keycloak refresh token (updated when we get a new one from refresh)
 }
 
 // AgentConfig encapsulates the configuration settings used to initialize an Agent.
 type AgentConfig struct {
-	CoordinatorAddr   string        // Network address of the coordinator gRPC endpoint
-	AuthToken         string        // JWT token for authentication
+	CoordinatorAddr    string        // Network address of the coordinator gRPC endpoint
+	AuthToken         string        // JWT access token (optional if RefreshToken + KeycloakTokenURL are set)
+	RefreshToken      string        // Keycloak refresh token for automatic token refresh
+	KeycloakTokenURL  string        // Keycloak token endpoint for refresh
+	KeycloakClientID  string        // OIDC client id for refresh
 	IPFSAPIURL        string        // HTTP API base URL for local IPFS node
 	IPFSDataDir       string        // IPFS data directory
 	NodeName          string        // Human-readable name for this node
@@ -56,28 +68,154 @@ func NewAgent(cfg AgentConfig, ipfsManager *ipfs.IPFSManager, logger *slog.Logge
 	}
 }
 
+// getAuthToken returns the current access token (thread-safe).
+func (a *Agent) getAuthToken() string {
+	a.tokenMu.RLock()
+	defer a.tokenMu.RUnlock()
+	return a.currentToken
+}
+
+// setTokens updates current and optionally refresh token (thread-safe).
+func (a *Agent) setTokens(access, refresh string) {
+	a.tokenMu.Lock()
+	defer a.tokenMu.Unlock()
+	a.currentToken = access
+	if refresh != "" {
+		a.refreshToken = refresh
+	}
+}
+
+// tokenResponse is the JSON response from Keycloak token endpoint.
+type tokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"` // seconds
+}
+
+// fetchTokenWithRefresh calls Keycloak token endpoint with grant_type=refresh_token and returns access token, new refresh token, and expires_in.
+func (a *Agent) fetchTokenWithRefresh(ctx context.Context, refreshToken string) (access, newRefresh string, expiresIn int, err error) {
+	clientID := a.config.KeycloakClientID
+	if clientID == "" {
+		clientID = "wabisaby-api"
+	}
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("client_id", clientID)
+	form.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.config.KeycloakTokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("token request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", "", 0, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+	var tr tokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return "", "", 0, fmt.Errorf("parse token response: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return "", "", 0, fmt.Errorf("no access_token in response")
+	}
+	exp := tr.ExpiresIn
+	if exp <= 0 {
+		exp = 300 // default 5 min
+	}
+	return tr.AccessToken, tr.RefreshToken, exp, nil
+}
+
+// resolveInitialToken sets currentToken (and refreshToken) from config: either use static token or fetch via refresh.
+func (a *Agent) resolveInitialToken(ctx context.Context) error {
+	if a.config.KeycloakTokenURL != "" && a.config.RefreshToken != "" {
+		a.logger.Info("fetching access token via refresh token")
+		access, newRefresh, expiresIn, err := a.fetchTokenWithRefresh(ctx, a.config.RefreshToken)
+		if err != nil {
+			return fmt.Errorf("fetch token: %w", err)
+		}
+		a.setTokens(access, newRefresh)
+		a.logger.Info("token obtained", "expires_in_sec", expiresIn)
+		return nil
+	}
+	if a.config.AuthToken != "" {
+		a.setTokens(a.config.AuthToken, "")
+		return nil
+	}
+	return fmt.Errorf("auth token is required: set WABISABY_NODE_AUTH_TOKEN or auth.token, or use auth.refresh_token with auth.keycloak_token_url for automatic refresh")
+}
+
+// startRefreshLoop starts a goroutine that refreshes the access token before it expires.
+func (a *Agent) startRefreshLoop(ctx context.Context) {
+	if a.config.KeycloakTokenURL == "" || a.config.RefreshToken == "" {
+		return
+	}
+	// Refresh a bit before expiry; default 5 min before
+	refreshInterval := 4 * time.Minute
+	go func() {
+		ticker := time.NewTicker(refreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.tokenMu.RLock()
+				rt := a.refreshToken
+				a.tokenMu.RUnlock()
+				if rt == "" {
+					continue
+				}
+				access, newRefresh, _, err := a.fetchTokenWithRefresh(ctx, rt)
+				if err != nil {
+					a.logger.Warn("token refresh failed", "error", err)
+					continue
+				}
+				a.setTokens(access, newRefresh)
+				a.logger.Info("token refreshed successfully")
+			}
+		}
+	}()
+}
+
 // Start begins the main lifecycle of the agent. It connects to the coordinator, registers the node,
 // and launches background goroutines for periodic heartbeats and pinning task polling.
 // This call is blocking until the context is canceled, at which time it closes the gRPC connection.
 func (a *Agent) Start(ctx context.Context) error {
+	if err := a.resolveInitialToken(ctx); err != nil {
+		return err
+	}
+	a.startRefreshLoop(ctx)
+
 	// 1. Initialize and start IPFS
 	if err := a.setupIPFS(ctx); err != nil {
+		a.logger.Error("IPFS setup failed", "error", err)
 		return fmt.Errorf("failed to setup IPFS: %w", err)
 	}
 
 	// 2. Get peer ID and multiaddresses
+	a.logger.Info("getting peer info from IPFS")
 	peerID, multiaddrs, err := a.ipfsManager.GetPeerInfo(ctx)
 	if err != nil {
+		a.logger.Error("get peer info failed", "error", err)
 		return fmt.Errorf("failed to get peer info: %w", err)
 	}
 	a.peerID = peerID
 
 	// 3. Connect to coordinator via gRPC with auth
+	a.logger.Info("connecting to coordinator", "addr", a.config.CoordinatorAddr)
 	conn, err := grpc.NewClient(
 		a.config.CoordinatorAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
+		a.logger.Error("coordinator connection failed", "addr", a.config.CoordinatorAddr, "error", err)
 		return fmt.Errorf("failed to connect to coordinator: %w", err)
 	}
 	a.conn = conn
@@ -85,7 +223,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.ipfs = ipfs.NewClient(a.config.IPFSAPIURL)
 
 	// 4. Register with coordinator
+	a.logger.Info("registering node with coordinator")
 	if err := a.register(ctx, multiaddrs); err != nil {
+		a.logger.Error("node registration failed", "error", err)
 		return fmt.Errorf("initial registration failed: %w", err)
 	}
 
@@ -146,7 +286,7 @@ func (a *Agent) setupIPFS(ctx context.Context) error {
 func (a *Agent) register(ctx context.Context, multiaddrs []string) error {
 	// Add auth token to metadata
 	md := metadata.New(map[string]string{
-		"authorization": "Bearer " + a.config.AuthToken,
+		"authorization": "Bearer " + a.getAuthToken(),
 	})
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
@@ -157,7 +297,7 @@ func (a *Agent) register(ctx context.Context, multiaddrs []string) error {
 		IpfsMultiaddrs:       multiaddrs,
 		StorageCapacityBytes: a.config.CapacityBytes,
 		WalletAddress:        a.config.WalletAddress,
-		AuthToken:            a.config.AuthToken,
+		AuthToken:            a.getAuthToken(),
 	})
 	if err != nil {
 		return err
@@ -174,7 +314,7 @@ func (a *Agent) register(ctx context.Context, multiaddrs []string) error {
 func (a *Agent) connectToPeers(ctx context.Context) error {
 	// Add auth token to metadata
 	md := metadata.New(map[string]string{
-		"authorization": "Bearer " + a.config.AuthToken,
+		"authorization": "Bearer " + a.getAuthToken(),
 	})
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
@@ -230,7 +370,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			uptimeSeconds := int64(time.Since(a.startTime).Seconds())
 			// Add auth token to metadata
 			md := metadata.New(map[string]string{
-				"authorization": "Bearer " + a.config.AuthToken,
+				"authorization": "Bearer " + a.getAuthToken(),
 			})
 			heartbeatCtx := metadata.NewOutgoingContext(ctx, md)
 
@@ -259,7 +399,7 @@ func (a *Agent) taskLoop(ctx context.Context) {
 		case <-ticker.C:
 			// Add auth token to metadata
 			md := metadata.New(map[string]string{
-				"authorization": "Bearer " + a.config.AuthToken,
+				"authorization": "Bearer " + a.getAuthToken(),
 			})
 			taskCtx := metadata.NewOutgoingContext(ctx, md)
 
@@ -295,7 +435,7 @@ func (a *Agent) processTask(ctx context.Context, task *nodepb.PinTask) {
 
 	// Add auth token to metadata
 	md := metadata.New(map[string]string{
-		"authorization": "Bearer " + a.config.AuthToken,
+		"authorization": "Bearer " + a.getAuthToken(),
 	})
 	reportCtx := metadata.NewOutgoingContext(ctx, md)
 
