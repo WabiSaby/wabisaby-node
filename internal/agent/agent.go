@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	nodepb "github.com/wabisaby/wabisaby-protos-go/go/node"
 	"github.com/wabisaby/wabisaby-node/internal/ipfs"
+	nodepb "github.com/wabisaby/wabisaby-protos-go/go/node"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -27,23 +27,23 @@ import (
 // It handles node registration, periodic heartbeats, polling and execution of pinning tasks,
 // and maintains status reporting logic.
 type Agent struct {
-	nodeID        string                       // Unique ID assigned by coordinator after registration
-	peerID        string                       // IPFS peer ID of this node
-	config        AgentConfig                  // Configuration for the Agent
-	client        nodepb.NodeCoordinatorClient // gRPC client for NodeCoordinator API
-	conn          *grpc.ClientConn             // Underlying gRPC connection
-	logger        *slog.Logger                 // Logger for agent events
-	ipfs          *ipfs.Client                  // Client for local IPFS API
-	ipfsManager   *ipfs.IPFSManager            // IPFS lifecycle manager
-	startTime     time.Time                    // Time when the agent started (for uptime tracking)
-	tokenMu       sync.RWMutex                 // protects currentToken and refreshToken
-	currentToken  string                       // current JWT access token (refreshed in background when refresh is configured)
-	refreshToken  string                       // Keycloak refresh token (updated when we get a new one from refresh)
+	nodeID       string                       // Unique ID assigned by coordinator after registration
+	peerID       string                       // IPFS peer ID of this node
+	config       AgentConfig                  // Configuration for the Agent
+	client       nodepb.NodeCoordinatorClient // gRPC client for NodeCoordinator API
+	conn         *grpc.ClientConn             // Underlying gRPC connection
+	logger       *slog.Logger                 // Logger for agent events
+	ipfs         *ipfs.Client                 // Client for local IPFS API
+	ipfsManager  *ipfs.IPFSManager            // IPFS lifecycle manager
+	startTime    time.Time                    // Time when the agent started (for uptime tracking)
+	tokenMu      sync.RWMutex                 // protects currentToken and refreshToken
+	currentToken string                       // current JWT access token (refreshed in background when refresh is configured)
+	refreshToken string                       // Keycloak refresh token (updated when we get a new one from refresh)
 }
 
 // AgentConfig encapsulates the configuration settings used to initialize an Agent.
 type AgentConfig struct {
-	CoordinatorAddr    string        // Network address of the coordinator gRPC endpoint
+	CoordinatorAddr   string        // Network address of the coordinator gRPC endpoint
 	AuthToken         string        // JWT access token (optional if RefreshToken + KeycloakTokenURL are set)
 	RefreshToken      string        // Keycloak refresh token for automatic token refresh
 	KeycloakTokenURL  string        // Keycloak token endpoint for refresh
@@ -156,7 +156,6 @@ func (a *Agent) startRefreshLoop(ctx context.Context) {
 	if a.config.KeycloakTokenURL == "" || a.config.RefreshToken == "" {
 		return
 	}
-	// Refresh a bit before expiry; default 5 min before
 	refreshInterval := 4 * time.Minute
 	go func() {
 		ticker := time.NewTicker(refreshInterval)
@@ -193,13 +192,11 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 	a.startRefreshLoop(ctx)
 
-	// 1. Initialize and start IPFS
 	if err := a.setupIPFS(ctx); err != nil {
 		a.logger.Error("IPFS setup failed", "error", err)
 		return fmt.Errorf("failed to setup IPFS: %w", err)
 	}
 
-	// 2. Get peer ID and multiaddresses
 	a.logger.Info("getting peer info from IPFS")
 	peerID, multiaddrs, err := a.ipfsManager.GetPeerInfo(ctx)
 	if err != nil {
@@ -208,7 +205,6 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 	a.peerID = peerID
 
-	// 3. Connect to coordinator via gRPC with auth
 	a.logger.Info("connecting to coordinator", "addr", a.config.CoordinatorAddr)
 	conn, err := grpc.NewClient(
 		a.config.CoordinatorAddr,
@@ -222,7 +218,6 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.client = nodepb.NewNodeCoordinatorClient(conn)
 	a.ipfs = ipfs.NewClient(a.config.IPFSAPIURL)
 
-	// 4. Register with coordinator
 	a.logger.Info("registering node with coordinator")
 	if err := a.register(ctx, multiaddrs); err != nil {
 		a.logger.Error("node registration failed", "error", err)
@@ -232,18 +227,15 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.startTime = time.Now()
 	a.logger.Info("node agent started and registered", "node_id", a.nodeID, "peer_id", a.peerID)
 
-	// 5. Connect to peers
 	if err := a.connectToPeers(ctx); err != nil {
 		a.logger.Warn("failed to connect to some peers", "error", err)
 	}
 
-	// 6. Start background workers
 	go a.heartbeatLoop(ctx)
 	go a.taskLoop(ctx)
 
 	<-ctx.Done()
 
-	// Stop IPFS daemon on shutdown
 	if err := a.ipfsManager.StopDaemon(ctx); err != nil {
 		a.logger.Warn("failed to stop IPFS daemon", "error", err)
 	}
@@ -255,12 +247,10 @@ func (a *Agent) Start(ctx context.Context) error {
 func (a *Agent) setupIPFS(ctx context.Context) error {
 	a.logger.Info("setting up IPFS")
 
-	// Ensure IPFS is installed
 	if err := a.ipfsManager.EnsureInstalled(ctx); err != nil {
 		return fmt.Errorf("failed to ensure IPFS is installed: %w", err)
 	}
 
-	// Initialize repository
 	if err := a.ipfsManager.InitializeRepo(ctx); err != nil {
 		return fmt.Errorf("failed to initialize IPFS repository: %w", err)
 	}
@@ -271,7 +261,6 @@ func (a *Agent) setupIPFS(ctx context.Context) error {
 		return fmt.Errorf("failed to configure private network: %w", err)
 	}
 
-	// Start daemon
 	if err := a.ipfsManager.StartDaemon(ctx); err != nil {
 		return fmt.Errorf("failed to start IPFS daemon: %w", err)
 	}
@@ -284,7 +273,6 @@ func (a *Agent) setupIPFS(ctx context.Context) error {
 // receiving a node ID which is persisted in the Agent instance.
 // Returns an error if registration is unsuccessful or coordinator rejects the operation.
 func (a *Agent) register(ctx context.Context, multiaddrs []string) error {
-	// Add auth token to metadata
 	md := metadata.New(map[string]string{
 		"authorization": "Bearer " + a.getAuthToken(),
 	})
@@ -312,13 +300,11 @@ func (a *Agent) register(ctx context.Context, multiaddrs []string) error {
 
 // connectToPeers connects to peers returned by the coordinator.
 func (a *Agent) connectToPeers(ctx context.Context) error {
-	// Add auth token to metadata
 	md := metadata.New(map[string]string{
 		"authorization": "Bearer " + a.getAuthToken(),
 	})
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
-	// Get peers from coordinator
 	resp, err := a.client.GetPeers(ctx, &nodepb.GetPeersRequest{
 		NodeId: a.nodeID,
 	})
@@ -330,7 +316,6 @@ func (a *Agent) connectToPeers(ctx context.Context) error {
 		return fmt.Errorf("coordinator error: %s", resp.Error)
 	}
 
-	// Connect to each peer
 	connected := 0
 	for _, peer := range resp.Peers {
 		for _, multiaddr := range peer.Multiaddrs {
@@ -357,7 +342,6 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Gather storage usage stats from local IPFS
 			stat, err := a.ipfs.RepoStat(ctx)
 			storageUsed := int64(0)
 			if err == nil && stat != nil {
@@ -368,7 +352,6 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				}
 			}
 			uptimeSeconds := int64(time.Since(a.startTime).Seconds())
-			// Add auth token to metadata
 			md := metadata.New(map[string]string{
 				"authorization": "Bearer " + a.getAuthToken(),
 			})
@@ -397,13 +380,11 @@ func (a *Agent) taskLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Add auth token to metadata
 			md := metadata.New(map[string]string{
 				"authorization": "Bearer " + a.getAuthToken(),
 			})
 			taskCtx := metadata.NewOutgoingContext(ctx, md)
 
-			// Poll coordinator for outstanding pinning tasks
 			resp, err := a.client.GetPinTasks(taskCtx, &nodepb.GetPinTasksRequest{
 				NodeId: a.nodeID,
 			})
@@ -422,7 +403,6 @@ func (a *Agent) taskLoop(ctx context.Context) {
 
 // processTask handles the full lifecycle for a single pinning task: Execute the pin via IPFS, then report status back to coordinator.
 func (a *Agent) processTask(ctx context.Context, task *nodepb.PinTask) {
-	// Attempt pin operation on local IPFS node
 	a.logger.Info("pinning content", "cid", task.Cid)
 
 	err := a.ipfs.Pin(ctx, task.Cid)
@@ -433,13 +413,11 @@ func (a *Agent) processTask(ctx context.Context, task *nodepb.PinTask) {
 		status = nodepb.ReportPinStatusRequest_PIN_STATUS_FAILED
 	}
 
-	// Add auth token to metadata
 	md := metadata.New(map[string]string{
 		"authorization": "Bearer " + a.getAuthToken(),
 	})
 	reportCtx := metadata.NewOutgoingContext(ctx, md)
 
-	// Notify coordinator of task outcome
 	_, err = a.client.ReportPinStatus(reportCtx, &nodepb.ReportPinStatusRequest{
 		NodeId: a.nodeID,
 		TaskId: task.TaskId,

@@ -71,14 +71,12 @@ func StartNodeAgent(
 
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			// Start agent in a goroutine - it will block until ctx.Done()
 			go func() {
 				if err := nodeAgent.Start(ctx); err != nil {
 					errStr := err.Error()
-					// Log error string explicitly so it's always visible (slog may not render some error types well)
 					logger.Error("agent stopped with error", "error", err, "message", errStr)
 					fmt.Fprintf(os.Stderr, "[node] ERROR agent stopped: %s\n", errStr)
-					time.Sleep(200 * time.Millisecond) // allow logs to flush before exit
+					time.Sleep(200 * time.Millisecond)
 					os.Exit(1)
 				}
 			}()
